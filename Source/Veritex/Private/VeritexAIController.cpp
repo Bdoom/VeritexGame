@@ -1,0 +1,238 @@
+// Daniel Gleason (C) 2017
+
+#include "VeritexAIController.h"
+#include "Veritex.h"
+#include "NavigationInvokerComponent.h"
+#include "NavigationSystem.h"
+#include "NavigationPath.h"
+#include "VeritexPathFollowingComponent.h"
+
+#include "BehaviorTree/BehaviorTree.h"
+#include "BehaviorTree/BehaviorTreeComponent.h"
+#include "BehaviorTree/BlackboardComponent.h"
+#include "BehaviorTree/Blackboard/BlackboardKeyType_Bool.h"
+#include "BehaviorTree/Blackboard/BlackboardKeyType_Object.h"
+
+//Perception
+#include "Perception/AIPerceptionComponent.h"
+#include "Perception/AISenseConfig_Sight.h"
+#include "Perception/AISenseConfig_Damage.h"
+#include "Perception/AISense_Sight.h"
+#include "Perception/AISense_Damage.h"
+#include "AI/AISense_VeritexSight.h"
+//End Perception
+
+#include "VeritexGameMode.h"
+
+#include "AudioDevice.h"
+
+#include "VeritexPlayerController.h"
+
+#include "NPC.h"
+
+#include "TimerManager.h"
+
+
+AVeritexAIController::AVeritexAIController(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UVeritexPathFollowingComponent>(TEXT("VeritexPathFollowingComponent")))
+{
+	bAttachToPawn = false;
+	PrimaryActorTick.bCanEverTick = false;
+
+	bReplicates = true;
+	bWantsPlayerState = false;
+
+	BlackboardComp = ObjectInitializer.CreateDefaultSubobject<UBlackboardComponent>(this, TEXT("BlackBoardComp"));
+
+	BrainComponent = BehaviorComp = ObjectInitializer.CreateDefaultSubobject<UBehaviorTreeComponent>(this, TEXT("BehaviorComp"));
+
+// 	PerceptionComponent = CreateDefaultSubobject<UAIPerceptionComponent>(TEXT("AIPerceptionComponent"));
+// 
+// 	SightConfig = CreateDefaultSubobject<UAISenseConfig_Sight>(TEXT("Sight Config"));
+// 	DamageConfig = CreateDefaultSubobject<UAISenseConfig_Damage>(TEXT("Damage Config"));
+
+	// Not sure if we have to override our own UAISenseConfig_Sight class? 
+
+// 	if (PerceptionComponent)
+// 	{
+// 		SightConfig->Implementation = UAISense_VeritexSight::StaticClass(); // Overriding the base implementation with my own implementation.
+// 		SightConfig->SightRadius = 1500; // was 1500
+// 		SightConfig->LoseSightRadius = 1500; // was 2048
+// 		SightConfig->PeripheralVisionAngleDegrees = 90; // Was 270
+// 		SightConfig->DetectionByAffiliation.bDetectEnemies = true;
+// 		SightConfig->DetectionByAffiliation.bDetectFriendlies = true;
+// 		SightConfig->DetectionByAffiliation.bDetectNeutrals = true;
+// 		SightConfig->AutoSuccessRangeFromLastSeenLocation = 200;
+// 		
+// 		PerceptionComponent->ConfigureSense(*SightConfig);
+// 		PerceptionComponent->ConfigureSense(*DamageConfig);
+// 	}
+
+}
+// 
+// void AVeritexAIController::OnHibernationModeChanged()
+// {
+// 	class ANPC* NPC = Cast<ANPC>(GetPawn());
+// 
+// 	if (NPC)
+// 	{
+// 		NPC->SetHibernate(IsHibernationModeEnabled());
+// 	}
+// 
+// 	if (IsHibernationModeEnabled())
+// 	{
+// 		RegisterAllActorTickFunctions(false, true);
+// 	}
+// 	else
+// 	{
+// 		RegisterAllActorTickFunctions(true, true);
+// 	}
+// 
+// 
+// 	if (GetBrainComponent())
+// 	{
+// 		if (IsHibernationModeEnabled())
+// 		{
+// 			GetBrainComponent()->StopLogic(TEXT("Hibernating"));
+// 		}
+// 		else
+// 		{
+// 			RunBehaviorTree(NPC->BotBehavior);
+// 		}
+// 	}
+// 
+// 
+// 	if (GetPerceptionComponent())
+// 	{
+// 		if (IsHibernationModeEnabled())
+// 		{
+// 			//GetPerceptionComponent()->UnregisterComponent();
+// 			GetPerceptionComponent()->SetComponentTickEnabled(false);
+// 		}
+// 		else
+// 		{
+// 			//GetPerceptionComponent()->RegisterComponent();
+// 			GetPerceptionComponent()->SetComponentTickEnabled(true);
+// 		}
+// 	}
+// 
+// }
+// 
+// void AVeritexAIController::SetHibernate(bool bHibernate)
+// {
+// 	if (!HasAuthority())
+// 	{
+// 		return;
+// 	}
+// 
+// 	if (bIsHibernating != bHibernate)
+// 	{
+// 		bIsHibernating = bHibernate;
+// 		OnHibernationModeChanged();
+// 	}
+// }
+
+void AVeritexAIController::BeginPlay()
+{
+	Super::BeginPlay();
+// 	if (PerceptionComponent)
+// 	{
+// 		PerceptionComponent->OnTargetPerceptionUpdated.AddDynamic(this, &AVeritexAIController::OnTargetPerceptionUpdated);
+// 	}
+
+	//UAIPerceptionSystem::RegisterPerceptionStimuliSource(this, UAISense_Sight::StaticClass(), this);
+// 	UAIPerceptionSystem::RegisterPerceptionStimuliSource(this, UAISense_VeritexSight::StaticClass(), this);
+// 	UAIPerceptionSystem::RegisterPerceptionStimuliSource(this, UAISense_Damage::StaticClass(), this);
+
+	if (HasAuthority())
+	{
+		AVeritexGameMode* VGM = GetWorld()->GetAuthGameMode<AVeritexGameMode>();
+		VGM->AIControllers.Add(this);
+	}
+
+}
+
+// void AVeritexAIController::OnTargetPerceptionUpdated(AActor* TheActor, FAIStimulus Stimulus)
+// {
+// 	SCOPE_CYCLE_COUNTER(STAT_VeritexPerceptionUpdate);
+// 
+// 	if (TheActor && Cast<AVeritexCharacter>(TheActor))
+// 	{
+// 		AVeritexCharacter* VeritexCharacter = Cast<AVeritexCharacter>(TheActor);
+// 		ANPC* NPC = Cast<ANPC>(GetPawn());
+// 		LastPerceiecedNPC = NPC;
+// 		if (VeritexCharacter && NPC)
+// 		{
+// 			if (Stimulus.WasSuccessfullySensed())
+// 			{
+// 				NPC->GetCharacterMovement()->MaxWalkSpeed = 375;
+// 				BlackboardComp->SetValueAsBool(TEXT("CanSeePlayer"), Stimulus.WasSuccessfullySensed());
+// 				BlackboardComp->SetValueAsObject(TEXT("CharacterToFollow"), VeritexCharacter);
+// 				Multicast_PlaySoundWhenPerceived();
+// 			}
+// 			else
+// 			{
+// 				NPC->GetCharacterMovement()->MaxWalkSpeed = NPC->MaxMovementSpeed;
+// 				BlackboardComp->SetValueAsBool(TEXT("CanSeePlayer"), Stimulus.WasSuccessfullySensed());
+// 				BlackboardComp->SetValueAsObject(TEXT("CharacterToFollow"), nullptr);
+// 			}
+// 		}
+// 	}
+// }
+
+void AVeritexAIController::Multicast_PlaySoundWhenPerceived_Implementation()
+{
+	if (GetPawn())
+	{
+		ANPC* NPC = Cast<ANPC>(GetPawn());
+		if (NPC->SoundToPlayWhenPerceived)
+		{
+			UAudioComponent* AudioComponent = GetWorld()->GetAudioDevice()->CreateComponent(NPC->SoundToPlayWhenPerceived);
+			AudioComponent->bAutoDestroy = true;
+			AudioComponent->Play();
+		}
+	}
+}
+
+bool AVeritexAIController::Multicast_PlaySoundWhenPerceived_Validate()
+{
+	return true;
+}
+
+void AVeritexAIController::OnPossess(APawn* InPawn)
+{
+	Super::OnPossess(InPawn);
+	ANPC* Bot = Cast<ANPC>(InPawn);
+
+	if (Bot && Bot->BotBehavior)
+	{
+		if (Bot->BotBehavior->BlackboardAsset)
+		{
+			BlackboardComp->InitializeBlackboard(*Bot->BotBehavior->BlackboardAsset);
+		}
+
+		BehaviorComp->StartTree(*(Bot->BotBehavior));
+	}
+
+}
+
+void AVeritexAIController::OnUnPossess()
+{
+	Super::OnUnPossess();
+
+	BehaviorComp->StopTree();
+
+	Destroy();
+}
+
+void AVeritexAIController::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (HasAuthority())
+	{
+		AVeritexGameMode* VGM = GetWorld()->GetAuthGameMode<AVeritexGameMode>();
+		VGM->AIControllers.RemoveSingle(this);
+	}
+
+	Super::EndPlay(EndPlayReason);
+}
+

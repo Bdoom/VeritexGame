@@ -1,0 +1,255 @@
+// Daniel Gleason (C) 2017
+
+#include "BiomeSpawner.h"
+#include "Veritex.h"
+#include "Components/BrushComponent.h"
+#include "TimerManager.h"
+#include "NPC.h"
+#include "InstancedFoliageActor.h"
+#include "AI/Navigation/NavigationSystem.h"
+#include "VeritexPlayerController.h"
+
+#include "Engine/LevelStreaming.h"
+#include "Engine/WorldComposition.h"
+#include "GameFramework/PlayerState.h"
+
+#include "GameFramework/GameStateBase.h"
+
+// Some reason I think other tiles are loading shit too... also loading on clients??
+
+ABiomeSpawner::ABiomeSpawner()
+{
+	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bStartWithTickEnabled = false;
+}
+
+void ABiomeSpawner::LevelLoaded()
+{
+	if (HasAuthority())
+	{
+		NumberOfLevelsRequiredToBeLoadedBeforeSpawning++;
+
+		if (NumberOfLevelsRequiredToBeLoadedBeforeSpawning >= 14) //16)
+		{
+			SpawnNPCs();
+		}
+	}
+}
+
+void ABiomeSpawner::SpawnNPCs()
+{
+	if (HasAuthority())
+	{
+		GSB = GetWorld()->GetAuthGameMode()->GameState;
+
+		for(; RandomLocationsToSpawnNPCs.Num() < NumberOfNPCsToSpawnInThisBiome;)
+		{
+			RandomLocationsToSpawnNPCs.AddUnique(RandomPointWithinVolumeGrounded());
+		}
+	}
+}
+
+void ABiomeSpawner::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (HasAuthority())
+	{
+		GetWorld()->GetTimerManager().SetTimer(SpawnerTick, this, &ABiomeSpawner::TickNPCs, 10.f, true, 5.f);
+
+		if (GetWorld()->GetMapName().Contains("Test"))
+		{
+			SpawnNPCs();
+			return;
+		}
+
+		if (GetWorld()->WorldComposition)
+		{
+			if (GetWorld()->WorldComposition->TilesStreaming.Num() >= 15)
+			{
+				for (ULevelStreaming* level : GetWorld()->WorldComposition->TilesStreaming)
+				{
+					// there are 16 levels
+					level->OnLevelLoaded.AddDynamic(this, &ABiomeSpawner::LevelLoaded);
+				}
+			}
+			else
+			{
+				SpawnNPCs();
+			}
+		}
+	}
+}
+
+void ABiomeSpawner::TickNPCs()
+{
+	SCOPE_CYCLE_COUNTER(STAT_TickNPCs_Start);
+
+	if (HasAuthority())
+	{
+		TArray<AActor*> OverlappingActors;
+		GetBrushComponent()->GetOverlappingActors(OverlappingActors, AVeritexCharacter::StaticClass());
+		if (OverlappingActors.Num() <= 0)
+		{
+			if (AI_In_This_Biome.Num() > 0)
+			{
+				for (int i = 0; i < AI_In_This_Biome.Num(); i++)
+				{
+					ANPC* NPC = AI_In_This_Biome[i];
+					if (NPC)
+					{
+						if (!NPC->IsPendingKill())
+						{
+							NPC->Destroy();
+						}
+					}
+				}
+				AI_In_This_Biome.Empty();
+			}
+			return;
+		}
+
+		
+		// Make sure all BiomeSpawners have Collision on brush component set to Ignore all but Overlap on Pawns.
+		UWorld* World = GetWorld();
+
+		if (AI_In_This_Biome.Num() < NumberOfNPCsToSpawnInThisBiome)
+		{
+			int32 NumberOfNPCsSpawnedThisTick = 0;
+			
+			for (int i = RandomLocationsToSpawnNPCs.Num() - 1; i >= 0; --i)
+			{
+				SCOPE_CYCLE_COUNTER(STAT_TickNPCs_SpawnPoints_Looping);
+				
+				if (NumberOfNPCsSpawnedThisTick >= NumberOfNPCsToSpawnPerTick)
+				{
+					return;
+				}
+
+				int32 RandomAIToSpawn = FMath::RandRange(0, AI_To_Spawn.Num() - 1);
+				TSubclassOf<ANPC> NPCToSpawn_Class = AI_To_Spawn[RandomAIToSpawn];
+
+				FVector Location = RandomLocationsToSpawnNPCs[i];
+				if (Location == FVector::ZeroVector)
+				{
+					RandomLocationsToSpawnNPCs.RemoveAt(i, 1, false);
+					continue;
+				}
+
+				for (APlayerState* PS : GSB->PlayerArray)
+				{
+					SCOPE_CYCLE_COUNTER(STAT_TickNPCs_PlayerStates_Looping);
+
+					AVeritexPlayerController* VPC = Cast<AVeritexPlayerController>(PS->GetOwner());
+					AVeritexCharacter* Char = VPC->MyCharacter;
+					if (Char)
+					{
+						// Make sure the spawn location is < 15000 * 15000 and greater than 10000 * 10000 units from the player
+						// Originally was this if (FVector::DistSquared(Location, Char->GetActorLocation()) < 15000 * 15000)
+						if (FVector::DistSquared(Location, Char->GetActorLocation()) < 35000 * 35000)
+						{
+							SCOPE_CYCLE_COUNTER(STAT_TickNPCs_DistSquared_Test);
+
+							if (NPCToSpawn_Class)
+							{
+								SCOPE_CYCLE_COUNTER(STAT_TickNPCs_Spawning_NPC);
+
+								FTransform SpawnTransform; 
+								SpawnTransform.SetLocation(Location);
+								ANPC* NPC = World->SpawnActor<ANPC>(NPCToSpawn_Class, SpawnTransform);
+								TWeakObjectPtr<ANPC> WeakNPC = NPC;
+								if (WeakNPC.IsValid())
+								{
+									if (NPC)
+									{
+										++NumberOfNPCsSpawnedThisTick;
+
+										AI_In_This_Biome.Add(NPC);
+										NPC->TheSpawnerThatSpawnedUs = this;
+										RandomLocationsToSpawnNPCs.RemoveAt(i, 1, false);
+										
+										if (NPC_MinLevel != 0 && NPC_MaxLevel != 0)
+										{
+											int RandomLevel = FMath::RandRange(NPC_MinLevel, NPC_MaxLevel);
+											NPC->Level = RandomLevel;
+										}
+										
+										SCOPE_CYCLE_COUNTER(STAT_TickNPCs_Setting_Stats);
+										NPC->SetStats();
+										
+										//UGameplayStatics::FinishSpawningActor(NPC, SpawnTransform);
+									}
+									else
+									{
+										RandomLocationsToSpawnNPCs.RemoveAt(i, 1, false);
+										RandomLocationsToSpawnNPCs.AddUnique(RandomPointWithinVolumeGrounded());
+									}
+								}
+							}
+							else
+							{
+								continue;
+							}
+							// Remove location from array
+							// Add Fvector tp ANPC, when ANPC dies, add it back to array
+
+						}
+					}
+				}
+			}
+
+		}
+	}
+}
+
+
+
+FVector ABiomeSpawner::RandomPointWithinVolume()
+{
+	FVector BoxExtent = FVector(BrushComp->Bounds.BoxExtent.X, BrushComp->Bounds.BoxExtent.Y, BrushComp->Bounds.BoxExtent.Z);
+	const FVector BoxMin = GetActorLocation() - BoxExtent;
+	const FVector BoxMax = GetActorLocation() + BoxExtent;
+	return FMath::RandPointInBox(FBox(BoxMin, BoxMax));
+}
+
+FVector ABiomeSpawner::RandomPointWithinVolumeGrounded()
+{
+	FVector RandomPoint = RandomPointWithinVolume();
+
+	FHitResult OutHit;
+
+	FCollisionQueryParams Params;
+	Params.AddIgnoredActor(this);
+	Params.AddIgnoredActor(AInstancedFoliageActor::GetInstancedFoliageActorForCurrentLevel(GetWorld()));
+
+	bool bSuccessful = GetWorld()->LineTraceSingleByChannel(OutHit, RandomPoint, RandomPoint + (GetActorUpVector() * -5000000), ECC_WorldStatic, Params);
+	
+	if (bSuccessful)
+	{
+		FVector LocationToSpawn = OutHit.Location + (GetActorUpVector() * 150);
+
+		return LocationToSpawn;
+	}
+
+	return FVector::ZeroVector;
+}
+
+int32 ABiomeSpawner::GetOmnivoresInThisBiome()
+{
+	return OmnivoresInThisBiome;
+}
+
+int32 ABiomeSpawner::GetNPCsInThisBiome()
+{
+	return NPCsInThisBiome;
+}
+
+int32 ABiomeSpawner::GetCarnivoresInThisBiome()
+{
+	return CarnivoresInThisBiome;
+}
+
+int32 ABiomeSpawner::GetHerbivoresInThisBiome()
+{
+	return HerbivoresInThisBiome;
+}
